@@ -2,30 +2,69 @@ import socket
 import struct
 import json
 import random
+import string
+import sys
+from encodings import cp437
 
-from config import *
+from common import *
 
-def sendrq_header(s: socket.socket, arg: str, rqtype: RequestType):
+# format in filename:
+#   {title}: the title
+#   {artist}: the artist
+#   {album}: the album
+FILENAME_FMT = "{artist} - {title}.opus"
+BUFFER_SIZE = 4096
+SERVER_ADDRESS = "192.168.1.234"
+SERVER_PORT = 3571
+SOCKET_TIMEOUT = 5
+
+class SafeFormatter(string.Formatter):
+    def get_value(self, key, args, kwargs):
+        if isinstance(key, str) and key not in kwargs:
+            return f"{{{key}}}"
+        return super().get_value(key, args, kwargs)
+
+def debug(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
+def save_file(data: bytes, tagslist: list) -> str:
+    context_tags = {
+        "title": tagslist[TagIndex.TITLE],
+        "artist": tagslist[TagIndex.ARTIST],
+        "album": tagslist[TagIndex.ALBUM]
+    }
+
+    formatter = SafeFormatter()
+    try:
+        fname = formatter.format(FILENAME_FMT, **context_tags)
+    except ValueError:
+        fname = f"{context_tags['title']}.opus"
+
+    with open(fname, "wb") as f:
+        f.write(data)
+    return fname
+
+def sendrq_header(sock: socket.socket, arg: str, rqtype: RequestType):
     tx_id = random.randint(1000, 9999)
 
-    print(f"TX: {tx_id} requesting {rqtype}")
+    debug(f"TX: {tx_id} requesting {rqtype.name}")
     rq_header = struct.pack("!BHI", rqtype, len(arg), tx_id)
-    s.sendall(rq_header)
-    s.sendall(arg.encode('utf-8'))
+    sock.sendall(rq_header)
+    sock.sendall(arg.encode('utf-8'))
 
-def fetch_search_results(s: socket.socket, arg: str):
-    sendrq_header(s, arg, RequestType.SEARCH)
+def fetch_search_results(sock: socket.socket, arg: str):
+    sendrq_header(sock, arg, RequestType.SEARCH)
 
-    header = s.recv(4)
+    header = sock.recv(4)
     if not header:
-        print("Connection closed by server")
+        debug("Connection closed by server")
         return None
 
     payload_size = struct.unpack("!I", header)[0]
 
     raw_payload = b""
     while len(raw_payload) < payload_size:
-        chunk = s.recv(min(SERVER_BUFFER_SIZE, payload_size - len(raw_payload)))
+        chunk = sock.recv(min(BUFFER_SIZE, payload_size - len(raw_payload)))
         if not chunk:
             raise ConnectionError("Connection closed by server mid-transfer")
         raw_payload += chunk
@@ -35,46 +74,67 @@ def fetch_search_results(s: socket.socket, arg: str):
     final_list = [tuple(item) for item in decoded_json]
     return final_list
 
-def fetch_download(s: socket.socket, arg: str):
-    sendrq_header(s, arg, RequestType.DOWNLOAD)
+def fetch_download(sock: socket.socket, arg: str):
+    sendrq_header(sock, arg, RequestType.DOWNLOAD)
 
-    header = s.recv(13)
+    header = sock.recv(13)
     if not header:
-        print("Connection closed by server")
+        debug("Connection closed by server")
         return None, None
 
-    error, fsize, fn_len = struct.unpack("!BQI", header)
+    error, fsize, tagsize = struct.unpack("!BQI", header)
     if not error:
-        return None, None
-    fname = s.recv(fn_len).decode("utf-8")
+        return None
+    tagslist = json.loads(sock.recv(tagsize).decode("utf-8"))
 
     raw_payload = b""
     while len(raw_payload) < fsize:
-        chunk = s.recv(min(SERVER_BUFFER_SIZE, fsize - len(raw_payload)))
+        chunk = sock.recv(min(BUFFER_SIZE, fsize - len(raw_payload)))
         if not chunk:
             raise ConnectionError("Connection closed by server mid-transfer")
         raw_payload += chunk
 
-    return fname, raw_payload
+    return tagslist, raw_payload
 
 if __name__ == '__main__':
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.connect(("192.168.1.234", SERVER_PORT))
-            s.settimeout(5)
-            print(f"Connected to server, requesting search")
+    try:
+        socket.setdefaulttimeout(SOCKET_TIMEOUT)
+        searchresults = []
+        while True:
+            prompt = input("> ")
+            prompt = prompt.strip().split()
+            if len(prompt) < 1:
+                print("Please enter a command and argument")
+                continue
+            cmd = prompt[0].lower()
+            cmdargs = " ".join(prompt[1:])
 
-            received = fetch_search_results(s, "A")
+            try:
+                if cmd == 'q':
+                    break
 
-            if received:
-                print(received)
-            else:
-                exit(1)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect((SERVER_ADDRESS, SERVER_PORT))
 
-            dwnldid = received[0][4]
-            filename, filedata = fetch_download(s, dwnldid)
-            print(f"Received {filename}, size {len(filedata)}")
-            with open(filename, "wb") as f:
-                f.write(filedata)
-        except Exception as e:
-            print(e)
+                    if cmd == 's':
+                        searchresults = fetch_search_results(s, cmdargs)
+                        if not searchresults:
+                            print("No search results")
+                            continue
+                        for i in range(len(searchresults)):
+                            print(f"{i+1}. {searchresults[i][0][TagIndex.ARTIST]} - {searchresults[i][0][TagIndex.TITLE]} ({searchresults[i][0][TagIndex.ALBUM]}) - {searchresults[i][1]:.2f}%")
+                    elif cmd == 'd':
+                        if searchresults is None or len(searchresults) == 0:
+                            print("Search something first")
+                            continue
+                        cmdargs = int(cmdargs)
+                        if cmdargs < 1 or cmdargs > len(searchresults):
+                            print("Index out of range")
+                            continue
+                        tags, filedata = fetch_download(s, searchresults[cmdargs-1][0][TagIndex.ID])
+                        filename = save_file(filedata, tags)
+                        print(f"Saved as {filename}")
+            except Exception as e:
+                print(f"Error: {e}")
+    except KeyboardInterrupt:
+        pass

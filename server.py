@@ -1,13 +1,9 @@
 import os.path
 import socket
-import threading
-import logging
-import json
 import struct
-from enum import IntEnum
+import threading
 
 from datafetcher import *
-from config import *
 
 class Server:
     def __init__(self):
@@ -16,6 +12,7 @@ class Server:
         self.logger = logging.getLogger(__name__)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(None)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((SERVER_HOST, SERVER_PORT))
 
@@ -49,7 +46,7 @@ class Server:
                 self.semaphore.acquire()
 
                 if req_id == RequestType.SEARCH:
-                    data = [self.fetcher.id_to_tags[res] for res in self.fetcher.search(arg)]
+                    data = [(self.fetcher.id_to_tags[res[0]], res[1]) for res in self.fetcher.search(arg)]
                     json_bytes = json.dumps(data).encode('utf-8')
 
                     data_size = len(json_bytes)
@@ -61,32 +58,33 @@ class Server:
                 elif req_id == RequestType.DOWNLOAD:
                     relpath = self.fetcher.keeper.id_to_file.get(arg)
                     if not relpath:
-                        self.logger.warning(f"TX: {tx_id} requested nonexistent file.")
+                        self.logger.warning(f"TX:{tx_id} requested nonexistent file.")
                         conn.sendall(struct.pack("!BQI", 0, 0, 0))
                         continue
 
                     filepath = os.path.join(SERVER_MUSIC_DIRECTORY, relpath)
                     if not os.path.exists(filepath) or not os.path.isfile(filepath):
-                        self.logger.warning(f"TX: {tx_id} requested nonexistent file.")
+                        self.logger.warning(f"TX:{tx_id} requested nonexistent file.")
                         conn.sendall(struct.pack("!BQI", 0, 0, 0))
                         continue
 
                     try:
                         file_size = os.path.getsize(filepath)
-                        fn_bytes = os.path.basename(filepath).encode('utf-8')
+                        #fn_bytes = os.path.basename(filepath).encode('utf-8')
+                        tags_bytes = json.dumps(self.fetcher.id_to_tags[self.fetcher.keeper.file_to_id[relpath]]).encode('utf-8')
 
-                        conn.sendall(struct.pack("!BQI", 1, file_size, len(fn_bytes)))
-                        conn.sendall(fn_bytes)
+                        conn.sendall(struct.pack("!BQI", 1, file_size, len(tags_bytes)))
+                        conn.sendall(tags_bytes)
 
                         with open(filepath, 'rb') as f:
                             while chunk := f.read(SERVER_BUFFER_SIZE):
                                 conn.sendall(chunk)
                     except Exception as e:
-                        self.logger.error(f"TX: {tx_id} failed sending: {e}")
+                        self.logger.error(f"TX:{tx_id} failed sending: {e}")
                     finally:
-                        self.logger.info(f"TX: {tx_id} Finished sending.")
+                        self.logger.info(f"TX:{tx_id} Finished sending.")
                 else:
-                    self.logger.error(f"TX: {tx_id} unknown request ID.")
+                    self.logger.error(f"TX:{tx_id} unknown request ID.")
         except ConnectionError:
             self.logger.warning(f"Client {addr} connection error.")
         finally:

@@ -5,8 +5,11 @@ import string
 import secrets
 
 from mutagen import File
+from rapidfuzz.utils import default_process
+from rapidfuzz import process, fuzz
 
 from config import *
+from common import *
 
 class IndexingException(Exception):
     pass
@@ -146,5 +149,32 @@ class DataFetcher:
                 tags.append(fid)
                 self.id_to_tags[fid] = tuple(tags)
 
-    def search(self, s: str) -> list[str]:
-        return ["vQTNp"]
+    def search(self, q: str, tags: list[int] | None = None) -> list[tuple[str, float]]:
+        if tags is None:
+            tags = [TagIndex.TITLE, TagIndex.ARTIST]
+        for tag in tags:
+            if tag < 0 or tag > 4:
+                return []
+        searchspace: list[str] = []
+        ids: list[str] = []
+        for item in self.id_to_tags.values():
+            searchable = [str(item[t]) for t in tags]
+            combined = ",".join(searchable)
+            searchspace.append(combined)
+            ids.append(item[TagIndex.ID])
+
+        results = process.extract(
+            q,
+            searchspace,
+            scorer=fuzz.WRatio,
+            processor=default_process,
+            limit=SERVER_SEARCH_RESULT_LIMIT,
+            score_cutoff=40.0
+        )
+
+        matches = []
+        for _, dist, idx in results:
+            songid = ids[idx]
+            matches.append((songid, dist))
+
+        return matches

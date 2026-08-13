@@ -1,7 +1,8 @@
 import logging
+import socket
 
 from server import Server
-from datafetcher import *
+from config import *
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -16,8 +17,8 @@ if __name__ == "__main__":
 
     logger = logging.getLogger(__name__)
     logger.info(f"Music directory: {SERVER_MUSIC_DIRECTORY}")
+    socket.setdefaulttimeout(5)
     server = Server()
-    print(server.fetcher.id_to_tags[server.fetcher.keeper.file_to_id['en/sepultura/roots/Sepultura - Dictatorshit ZzQZFP5EcbU.opus']])
 
     try:
         server.run()
