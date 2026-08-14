@@ -4,6 +4,7 @@ import logging
 import string
 import secrets
 from collections import defaultdict
+from traceback import format_exc
 
 from mutagen import File
 import filetype
@@ -84,6 +85,10 @@ class DatabaseKeeper:
             except json.JSONDecodeError:
                 self.logger.critical("Registry file corrupt. Remove it and restart server to rebuild.")
                 raise IndexingException("Registry file corrupt.")
+            except Exception as e:
+                self.logger.critical(f"Registry file loading failure: {e}")
+                self.logger.info(format_exc())
+                raise IndexingException("Registry file loading failure.")
         return False
 
     def index_files(self):
@@ -117,9 +122,12 @@ class DatabaseKeeper:
                 changed = True
 
         if changed or not os.path.exists(self.indexdb):
-            with open(self.indexdb, 'w', encoding='utf-8') as f:
-                json.dump(self.id_to_info, f, indent=4)
-            self.logger.info("Synced changes to file database.")
+            try:
+                with open(self.indexdb, 'w', encoding='utf-8') as f:
+                    json.dump(self.id_to_info, f, indent=4)
+                self.logger.info("Synced changes to file database.")
+            except Exception as e:
+                self.logger.error(f"Failed to sync file database: {e}. Program will still function.")
         else:
             self.logger.info("No changes to file database.")
 
