@@ -105,6 +105,8 @@ class DatabaseKeeper:
             if rel_path not in self.file_to_id:
                 new_id = self._gen_file_id()
                 new_tags = self.reader.fetch_filetags(os.path.join(self.dbdir, rel_path), new_id)
+                if new_tags is None:
+                    continue
                 self.id_to_file[new_id] = rel_path
                 self.file_to_id[rel_path] = new_id
                 self.id_to_info[new_id] = {
