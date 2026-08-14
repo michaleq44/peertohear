@@ -4,7 +4,9 @@ import json
 import random
 import string
 import sys
-from encodings import cp437
+import time
+from traceback import format_exc
+from colorama import init, Fore, Back, Style
 
 from common import *
 
@@ -13,10 +15,12 @@ from common import *
 #   {artist}: the artist
 #   {album}: the album
 FILENAME_FMT = "{artist} - {title}.opus"
+ALBUM_NAME_FMT = "{artist} - {album}"
 BUFFER_SIZE = 4096
 SERVER_ADDRESS = "192.168.1.234"
 SERVER_PORT = 3571
 SOCKET_TIMEOUT = 5
+MAX_NUMBER_RESULTS_SHOWN = 10
 
 class SafeFormatter(string.Formatter):
     def get_value(self, key, args, kwargs):
@@ -26,6 +30,24 @@ class SafeFormatter(string.Formatter):
 
 def debug(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
+def print_results(table: list[list[str | tuple[str, bool]]]):
+    max_lens = [0 for _ in range(max(len(item) for item in table))]
+    for item in table:
+        for it in range(len(item)):
+            col = item[it]
+            max_lens[it] = max(max_lens[it], len(col if isinstance(col, str) else col[0]))
+    for item in table:
+        for it in range(len(item)):
+            col = item[it]
+            if isinstance(col, str):
+                print(f"{col:<{max_lens[it]}} ", end="")
+            else:
+                if col[1]:
+                    print(f"{col[0]:>{max_lens[it]}} ", end="")
+                else:
+                    print(f"{col[0]:<{max_lens[it]}} ", end="")
+        print()
 
 def save_file(data: bytes, tagslist: list) -> str:
     context_tags = {
@@ -52,9 +74,7 @@ def sendrq_header(sock: socket.socket, arg: str, rqtype: RequestType):
     sock.sendall(rq_header)
     sock.sendall(arg.encode('utf-8'))
 
-def fetch_search_results(sock: socket.socket, arg: str):
-    sendrq_header(sock, arg, RequestType.SEARCH)
-
+def recv_json(sock: socket.socket) -> dict | None:
     header = sock.recv(4)
     if not header:
         debug("Connection closed by server")
@@ -71,7 +91,36 @@ def fetch_search_results(sock: socket.socket, arg: str):
 
     decoded_json = json.loads(raw_payload.decode("utf-8"))
 
-    final_list = [tuple(item) for item in decoded_json]
+    return decoded_json
+
+def fetch_search_results(sock: socket.socket, arg: str):
+    sendrq_header(sock, arg, RequestType.SEARCH)
+
+    received = recv_json(sock)
+    if received is None:
+        return None
+
+    final_list = [tuple(item) for item in received]
+    return final_list
+
+def fetch_album_search(sock: socket.socket, arg: str):
+    sendrq_header(sock, arg, RequestType.SEARCH_ALBUM)
+
+    received = recv_json(sock)
+    if received is None:
+        return None
+
+    final_list = [tuple(item) for item in received]
+    return final_list
+
+def fetch_album_contents(sock: socket.socket, arg: str):
+    sendrq_header(sock, arg, RequestType.SHOW_ALBUM)
+
+    received = recv_json(sock)
+    if received is None:
+        return None
+
+    final_list = [tuple(item) for item in received]
     return final_list
 
 def fetch_download(sock: socket.socket, arg: str):
@@ -97,11 +146,14 @@ def fetch_download(sock: socket.socket, arg: str):
     return tagslist, raw_payload
 
 if __name__ == '__main__':
+    init(autoreset=True)
     try:
         socket.setdefaulttimeout(SOCKET_TIMEOUT)
         searchresults = []
+        albumresults = []
         while True:
-            prompt = input("> ")
+            print("> ", end="")
+            prompt = input()
             prompt = prompt.strip().split()
             if len(prompt) < 1:
                 print("Please enter a command and argument")
@@ -121,8 +173,50 @@ if __name__ == '__main__':
                         if not searchresults:
                             print("No search results")
                             continue
-                        for i in range(len(searchresults)):
-                            print(f"{i+1}. {searchresults[i][0][TagIndex.ARTIST]} - {searchresults[i][0][TagIndex.TITLE]} ({searchresults[i][0][TagIndex.ALBUM]}) - {searchresults[i][1]:.2f}%")
+                        searchresults = searchresults[:min(len(searchresults)-1, MAX_NUMBER_RESULTS_SHOWN-1)]
+                        searchresults = [result[0] for result in searchresults]
+                        res = [[(Style.DIM + f"{idx+1}.", True),
+                                result[TagIndex.ARTIST],
+                                Style.BRIGHT+Fore.GREEN + result[TagIndex.TITLE],
+                                Style.DIM+Fore.BLUE + f"({result[TagIndex.ALBUM]})",
+                                (Style.BRIGHT + time.strftime("%M:%S", time.gmtime(result[TagIndex.DURATION])), True),
+                                (bytes_si(result[TagIndex.SIZE])[0], True),
+                                (Style.DIM + bytes_si(result[TagIndex.SIZE])[1], True),
+                                Fore.RED + result[TagIndex.TYPE]]
+                               for idx, (result, _) in enumerate(searchresults)]
+                        print_results(res)
+                    elif cmd == 'sa':
+                        albumresults = fetch_album_search(s, cmdargs)
+                        if not albumresults:
+                            print("No album results")
+                            continue
+                        res = [[(Style.DIM + f"{idx+1}.", True),
+                                artist,
+                                Style.BRIGHT+Fore.GREEN + album]
+                               for idx, (_, artist, album, dist) in enumerate(albumresults)]
+                        print_results(res)
+                    elif cmd == 'a':
+                        if albumresults is None or len(albumresults) == 0:
+                            print("Search an album first")
+                            continue
+                        cmdargs = int(cmdargs)
+                        if cmdargs < 1 or cmdargs > len(albumresults):
+                            print("Index out of range")
+                            continue
+                        searchresults = fetch_album_contents(s, albumresults[cmdargs-1][0])
+                        if not searchresults:
+                            print("Album contents not found")
+                            continue
+                        res = [[(Style.DIM + str(result[TagIndex.TRACK]), True),
+                                result[TagIndex.ARTIST],
+                                Style.BRIGHT + Fore.GREEN + result[TagIndex.TITLE],
+                                Style.DIM + Fore.BLUE + f"({result[TagIndex.ALBUM]})",
+                                (Style.BRIGHT + time.strftime("%M:%S", time.gmtime(result[TagIndex.DURATION])), True),
+                                (bytes_si(result[TagIndex.SIZE])[0], True),
+                                (Style.DIM + bytes_si(result[TagIndex.SIZE])[1], True),
+                                Fore.RED + result[TagIndex.TYPE]]
+                               for result in searchresults]
+                        print_results(res)
                     elif cmd == 'd':
                         if searchresults is None or len(searchresults) == 0:
                             print("Search something first")
@@ -131,10 +225,11 @@ if __name__ == '__main__':
                         if cmdargs < 1 or cmdargs > len(searchresults):
                             print("Index out of range")
                             continue
-                        tags, filedata = fetch_download(s, searchresults[cmdargs-1][0][TagIndex.ID])
+                        tags, filedata = fetch_download(s, searchresults[cmdargs-1][TagIndex.ID])
                         filename = save_file(filedata, tags)
                         print(f"Saved as {filename}")
             except Exception as e:
                 print(f"Error: {e}")
+                debug(format_exc())
     except KeyboardInterrupt:
         pass

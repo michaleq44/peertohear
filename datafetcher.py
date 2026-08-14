@@ -3,24 +3,42 @@ import json
 import logging
 import string
 import secrets
+from collections import defaultdict
 
 from mutagen import File
+import filetype
+from filetype.types import Type
 from rapidfuzz.utils import default_process
 from rapidfuzz import process, fuzz
 
 from config import *
 from common import *
 
+
 class IndexingException(Exception):
     pass
+
+
+class Opus(Type):
+    MIME = 'audio/opus'
+    EXTENSION = 'opus'
+    def __init__(self):
+        super().__init__(self.MIME, self.EXTENSION)
+
+    def match(self, buf):
+        if len(buf) > 36 and buf[0:4] == b"OggS":
+            if buf[28:36] == b"OpusHead":
+                return True
+        return False
+
 
 class TagReader:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.audio = None
 
-    # tag format artist, title, album, duration (s)
-    def fetch_filetags(self, fname: str) -> tuple[str, str, str, int] | None:
+    # tag format artist, title, album, id, duration (s), track_number, size, filetype
+    def fetch_filetags(self, fname: str, fid: str) -> tuple[str, str, str, str, int, int, int, str] | None:
         if not os.path.exists(fname):
             self.logger.error(f"File {fname} does not exist. Skipping.")
             return None
@@ -38,6 +56,7 @@ class TagReader:
         title = self.audio.get("title", [None])[0]
         artist = self.audio.get("artist", [None])[0]
         album = self.audio.get("album", [None])[0]
+        track_number = int(str(self.audio.get("tracknumber", [0])[0]).strip().split('/')[0])
 
         """
         title, artist, album = None, None, None
@@ -63,17 +82,24 @@ class TagReader:
         """
 
         if title and artist and album:
-            return title, artist, album, int(self.audio.info.length)
+            return (title.strip(), artist.strip(), album.strip(),
+                    fid, int(self.audio.info.length), track_number,
+                    os.path.getsize(fname), filetype.guess(fname).extension)
         self.logger.error(f"File {fname} is not properly tagged or unsupported. Skipping.")
         return None
+
 
 class DatabaseKeeper:
     def __init__(self):
         self.dbdir = SERVER_MUSIC_DIRECTORY
         self.indexdb = SERVER_INDEX_PATH
         self.logger = logging.getLogger(__name__)
+        self.reader = TagReader()
         self.id_to_file: dict[str, str] = {}
         self.file_to_id: dict[str, str] = {}
+        self.id_to_info = {}
+
+        filetype.add_type(Opus())
 
     def _gen_file_id(self):
         alphabet = string.ascii_letters + string.digits
@@ -88,8 +114,9 @@ class DatabaseKeeper:
         if os.path.isfile(self.indexdb):
             try:
                 with open(self.indexdb, 'r', encoding='utf-8') as f:
-                    self.id_to_file = json.load(f)
-                    self.file_to_id = {fname: fid for fid, fname in self.id_to_file.items()}
+                    self.id_to_info = json.load(f)
+                    self.id_to_file = {fid: finfo['name'] for fid, finfo in self.id_to_info.items()}
+                    self.file_to_id = {finfo['name']: fid for fid, finfo in self.id_to_info.items()}
                 self.logger.info("Loaded file index from file.")
                 return True
             except json.JSONDecodeError:
@@ -110,8 +137,13 @@ class DatabaseKeeper:
         for rel_path in current_files:
             if rel_path not in self.file_to_id:
                 new_id = self._gen_file_id()
+                new_tags = self.reader.fetch_filetags(os.path.join(self.dbdir, rel_path), new_id)
                 self.id_to_file[new_id] = rel_path
                 self.file_to_id[rel_path] = new_id
+                self.id_to_info[new_id] = {
+                    'name': rel_path,
+                    'tags': new_tags
+                }
                 changed = True
 
         for rel_path in list(self.file_to_id.keys()):
@@ -119,41 +151,50 @@ class DatabaseKeeper:
                 dead_id = self.file_to_id[rel_path]
                 del self.id_to_file[dead_id]
                 del self.file_to_id[rel_path]
+                del self.id_to_info[dead_id]
                 changed = True
 
         if changed or not os.path.exists(self.indexdb):
             with open(self.indexdb, 'w', encoding='utf-8') as f:
-                json.dump(self.id_to_file, f, indent=4)
+                json.dump(self.id_to_info, f, indent=4)
             self.logger.info("Synced changes to file database.")
         else:
             self.logger.info("No changes to file database.")
+
 
 class DataFetcher:
     def __init__(self):
         self.keeper = DatabaseKeeper()
         self.logger = logging.getLogger(__name__)
-        # title, artist, album, length, id
+        # title, artist, album, length, id, size, type
         self.id_to_tags: dict[str, tuple] = {}
+        self.albums: dict[str, list] = {}
         self.reader = TagReader()
         self.dbdir = SERVER_MUSIC_DIRECTORY
 
         self.keeper.load_registry()
         self.keeper.index_files()
 
-        for fname, fid in self.keeper.file_to_id.items():
-            fullpath = os.path.join(SERVER_MUSIC_DIRECTORY, fname)
-            self.logger.info(f"Fetching tags for {fullpath}")
-            tags = self.reader.fetch_filetags(fullpath)
-            if tags:
-                tags = list(tags)
-                tags.append(fid)
-                self.id_to_tags[fid] = tuple(tags)
+        for fid, finfo in self.keeper.id_to_info.items():
+            self.id_to_tags[fid] = finfo['tags']
 
-    def search(self, q: str, tags: list[int] | None = None) -> list[tuple[str, float]]:
+        self.logger.info("Building album cache.")
+        albums = defaultdict(list)
+        for fid, tags in self.id_to_tags.items():
+            albumstring = tags[TagIndex.ARTIST].lower() + tags[TagIndex.ALBUM].lower()
+            albums[albumstring].append((tags[TagIndex.TRACK], fid))
+
+        for album, tracks in albums.items():
+            tracks.sort(key=lambda x: x[0])
+            self.albums[album] = [fid for _, fid in tracks]
+
+        self.logger.info(f"Built album cache: {len(self.albums)} items, average {len(self.id_to_tags)/len(self.albums):.2f} tracks")
+
+    def search_track(self, q: str, tags: list[int] | None = None) -> list[tuple[str, float]]:
         if tags is None:
             tags = [TagIndex.TITLE, TagIndex.ARTIST]
         for tag in tags:
-            if tag < 0 or tag > 4:
+            if tag < 0 or tag > TagIndex.ID:
                 return []
         searchspace: list[str] = []
         ids: list[str] = []
@@ -176,5 +217,23 @@ class DataFetcher:
         for _, dist, idx in results:
             songid = ids[idx]
             matches.append((songid, dist))
+
+        return matches
+
+    def search_album(self, q: str) -> list[tuple[str, str, str, str]]:
+        searchspace: list[str] = list(self.albums.keys())
+
+        results = process.extract(
+            q,
+            searchspace,
+            scorer=fuzz.WRatio,
+            processor=default_process,
+            limit=SERVER_SEARCH_RESULT_LIMIT,
+            score_cutoff=40.0
+        )
+
+        matches = []
+        for match, dist, _ in results:
+            matches.append((match, self.id_to_tags[self.albums[match][0]][TagIndex.ARTIST], self.id_to_tags[self.albums[match][0]][TagIndex.ALBUM], dist))
 
         return matches

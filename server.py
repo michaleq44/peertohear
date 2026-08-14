@@ -46,7 +46,7 @@ class Server:
                 self.semaphore.acquire()
 
                 if req_id == RequestType.SEARCH:
-                    data = [(self.fetcher.id_to_tags[res[0]], res[1]) for res in self.fetcher.search(arg)]
+                    data = [(self.fetcher.id_to_tags[res[0]], res[1]) for res in self.fetcher.search_track(arg)]
                     json_bytes = json.dumps(data).encode('utf-8')
 
                     data_size = len(json_bytes)
@@ -83,6 +83,33 @@ class Server:
                         self.logger.error(f"TX:{tx_id} failed sending: {e}")
                     finally:
                         self.logger.info(f"TX:{tx_id} Finished sending.")
+                elif req_id == RequestType.SEARCH_ALBUM:
+                    data = self.fetcher.search_album(arg)
+                    json_bytes = json.dumps(data).encode('utf-8')
+
+                    data_size = len(json_bytes)
+                    header = struct.pack("!I", data_size)
+
+                    conn.sendall(header)
+                    conn.sendall(json_bytes)
+                    self.logger.info(f"Sent package ({data_size} bytes) to client {addr}")
+                elif req_id == RequestType.SHOW_ALBUM:
+                    tracks = self.fetcher.albums.get(arg)
+                    if not tracks:
+                        self.logger.warning(f"TX:{tx_id} requested nonexistent album.")
+                        header = struct.pack("!I", 0)
+                        conn.sendall(header)
+                        continue
+
+                    data = [self.fetcher.id_to_tags[track] for track in tracks]
+                    json_bytes = json.dumps(data).encode('utf-8')
+
+                    data_size = len(json_bytes)
+                    header = struct.pack("!I", data_size)
+
+                    conn.sendall(header)
+                    conn.sendall(json_bytes)
+                    self.logger.info(f"Sent package ({data_size} bytes) to client {addr}")
                 else:
                     self.logger.error(f"TX:{tx_id} unknown request ID.")
         except ConnectionError:

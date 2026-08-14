@@ -1,2 +1,4 @@
 mutagen
 rapidfuzz
+filetype
+colorama
