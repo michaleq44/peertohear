@@ -5,6 +5,9 @@ import random
 import string
 import sys
 import time
+import os
+import zipfile
+import io
 from traceback import format_exc
 from colorama import init, Fore, Back, Style
 
@@ -14,9 +17,9 @@ from common import *
 #   {title}: the title
 #   {artist}: the artist
 #   {album}: the album
-FILENAME_FMT = "{artist} - {title}.opus"
+FILENAME_FMT = "{artist} - {title}"
 ALBUM_NAME_FMT = "{artist} - {album}"
-BUFFER_SIZE = 4096
+BUFFER_SIZE = 128 * 1024
 SERVER_ADDRESS = "192.168.1.234"
 SERVER_PORT = 3571
 SOCKET_TIMEOUT = 5
@@ -49,7 +52,7 @@ def print_results(table: list[list[str | tuple[str, bool]]]):
                     print(f"{col[0]:<{max_lens[it]}} ", end="")
         print()
 
-def save_file(data: bytes, tagslist: list) -> str:
+def save_file(data: bytes, tagslist: list, dest: str = ".") -> str:
     context_tags = {
         "title": tagslist[TagIndex.TITLE],
         "artist": tagslist[TagIndex.ARTIST],
@@ -58,13 +61,39 @@ def save_file(data: bytes, tagslist: list) -> str:
 
     formatter = SafeFormatter()
     try:
-        fname = formatter.format(FILENAME_FMT, **context_tags)
+        fname = formatter.format(FILENAME_FMT, **context_tags)+f".{tagslist[TagIndex.TYPE]}"
     except ValueError:
-        fname = f"{context_tags['title']}.opus"
+        fname = f"{context_tags['title']}.{tagslist[TagIndex.TYPE]}"
 
-    with open(fname, "wb") as f:
+    with open(os.path.join(dest, fname), "wb") as f:
         f.write(data)
     return fname
+
+def save_album(data: bytes, tracktags: dict) -> str:
+    firsttrack = next(iter(tracktags.values()))
+    artist = firsttrack[TagIndex.ARTIST]
+    album = firsttrack[TagIndex.ALBUM]
+    context_tags = {
+        "artist": artist,
+        "album": album
+    }
+
+    formatter = SafeFormatter()
+    try:
+        dirname = formatter.format(ALBUM_NAME_FMT, **context_tags)
+    except ValueError:
+        dirname = f"{context_tags['album']}"
+    os.makedirs(dirname, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        files = []
+        for info in zf.infolist():
+            if not info.is_dir():
+                data = zf.read(info.filename)
+                files.append((info.filename, data))
+    for fname, fdata in files:
+        save_file(fdata, tracktags[fname], dirname)
+
+    return dirname
 
 def sendrq_header(sock: socket.socket, arg: str, rqtype: RequestType):
     tx_id = random.randint(1000, 9999)
@@ -133,7 +162,29 @@ def fetch_download(sock: socket.socket, arg: str):
 
     error, fsize, tagsize = struct.unpack("!BQI", header)
     if not error:
-        return None
+        return None, None
+    tagslist = json.loads(sock.recv(tagsize).decode("utf-8"))
+
+    raw_payload = b""
+    while len(raw_payload) < fsize:
+        chunk = sock.recv(min(BUFFER_SIZE, fsize - len(raw_payload)))
+        if not chunk:
+            raise ConnectionError("Connection closed by server mid-transfer")
+        raw_payload += chunk
+
+    return tagslist, raw_payload
+
+def fetch_album_download(sock: socket.socket, arg: str):
+    sendrq_header(sock, arg, RequestType.DOWNLOAD_ALBUM)
+
+    header = sock.recv(13)
+    if not header:
+        debug("Connection closed by server")
+        return None, None
+
+    error, fsize, tagsize = struct.unpack("!BQI", header)
+    if not error:
+        return None, None
     tagslist = json.loads(sock.recv(tagsize).decode("utf-8"))
 
     raw_payload = b""
@@ -228,6 +279,17 @@ if __name__ == '__main__':
                         tags, filedata = fetch_download(s, searchresults[cmdargs-1][TagIndex.ID])
                         filename = save_file(filedata, tags)
                         print(f"Saved as {filename}")
+                    elif cmd == 'da':
+                        if albumresults is None or len(albumresults) == 0:
+                            print("Search an album first")
+                            continue
+                        cmdargs = int(cmdargs)
+                        if cmdargs < 1 or cmdargs > len(albumresults):
+                            print("Index out of range")
+                            continue
+                        tags, filedata = fetch_album_download(s, albumresults[cmdargs-1][TagIndex.TITLE])
+                        foldername = save_album(filedata, tags)
+                        print(f"Saved as {foldername}")
             except Exception as e:
                 print(f"Error: {e}")
                 debug(format_exc())
