@@ -7,7 +7,6 @@ from collections import defaultdict
 
 from mutagen import File
 import filetype
-from filetype.types import Type
 from rapidfuzz.utils import default_process
 from rapidfuzz import process, fuzz
 
@@ -17,20 +16,6 @@ from common import *
 
 class IndexingException(Exception):
     pass
-
-
-class Opus(Type):
-    MIME = 'audio/opus'
-    EXTENSION = 'opus'
-    def __init__(self):
-        super().__init__(self.MIME, self.EXTENSION)
-
-    def match(self, buf):
-        if len(buf) > 36 and buf[0:4] == b"OggS":
-            if buf[28:36] == b"OpusHead":
-                return True
-        return False
-
 
 class TagReader:
     def __init__(self):

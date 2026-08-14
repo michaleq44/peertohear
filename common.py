@@ -1,4 +1,5 @@
 from enum import IntEnum
+from filetype import Type
 
 CLIENT_HEADER_SIZE = 7
 
@@ -21,6 +22,18 @@ class TagIndex(IntEnum):
     TRACK = 5
     SIZE = 6
     TYPE = 7
+
+class Opus(Type):
+    MIME = 'audio/opus'
+    EXTENSION = 'opus'
+    def __init__(self):
+        super().__init__(self.MIME, self.EXTENSION)
+
+    def match(self, buf):
+        if len(buf) > 36 and buf[0:4] == b"OggS":
+            if buf[28:36] == b"OpusHead":
+                return True
+        return False
 
 def bytes_si(size_bytes: int, decimal_places: int = 2, binary: bool = True) -> tuple[str, str]:
     if size_bytes == 0:
