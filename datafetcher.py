@@ -143,7 +143,7 @@ class DataFetcher:
         self.logger.info("Building album cache.")
         albums = defaultdict(list)
         for fid, tags in self.id_to_tags.items():
-            albumstring = tags[TagIndex.ARTIST].lower() + tags[TagIndex.ALBUM].lower()
+            albumstring = ",".join([tags[TagIndex.ARTIST], tags[TagIndex.ALBUM]])
             albums[albumstring].append((tags[TagIndex.TRACK], fid))
 
         for album, tracks in albums.items():
