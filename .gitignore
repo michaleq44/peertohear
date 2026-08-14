@@ -3,3 +3,4 @@
 *.opus
 *.json
 client.py
+__pycache__/
