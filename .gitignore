@@ -4,4 +4,4 @@
 *.json
 client.py
 __pycache__/
-p2hcli/
+p2hcli
