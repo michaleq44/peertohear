@@ -4,14 +4,19 @@ import struct
 import threading
 import zipfile
 import io
+import time
 
 from datafetcher import *
 
 class Server:
     def __init__(self):
-        self.fetcher = DataFetcher()
-        self.semaphore = threading.Semaphore(SERVER_MAX_CONNECTIONS)
         self.logger = logging.getLogger(__name__)
+        self.logger.info("Starting indexing...")
+        started = time.perf_counter()
+        self.fetcher = DataFetcher()
+        ended = time.perf_counter()
+        self.logger.info(f"Finished indexing. Took {ended - started:.2f} seconds.")
+        self.semaphore = threading.Semaphore(SERVER_MAX_CONNECTIONS)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(None)

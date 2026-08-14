@@ -165,7 +165,7 @@ class DataFetcher:
             tracks.sort(key=lambda x: x[0])
             self.albums[album] = [fid for _, fid in tracks]
 
-        self.logger.info(f"Built album cache: {len(self.albums)} items, average {len(self.id_to_tags)/len(self.albums):.2f} tracks")
+        self.logger.info(f"Built album cache: {len(self.albums)} items, {len(self.id_to_tags)} tracks indexed.")
 
     def search_track(self, q: str, tags: list[int] | None = None) -> list[tuple[str, float]]:
         if tags is None:
