@@ -128,7 +128,7 @@ class DataFetcher:
     def __init__(self):
         self.keeper = DatabaseKeeper()
         self.logger = logging.getLogger(__name__)
-        # title, artist, album, length, id, size, type
+        # title, artist, album, id, length, track, size, type
         self.id_to_tags: dict[str, tuple] = {}
         self.albums: dict[str, list] = {}
         self.reader = TagReader()
