@@ -2,3 +2,4 @@
 *.log
 *.opus
 *.json
+client.py

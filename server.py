@@ -5,8 +5,6 @@ import threading
 import zipfile
 import io
 
-from pip._internal.utils import compatibility_tags
-
 from datafetcher import *
 
 class Server:
@@ -36,7 +34,7 @@ class Server:
 
         try:
             while True:
-                header = conn.recv(7)
+                header = conn.recv(CLIENT_HEADER_SIZE)
                 if not header:
                     break
 
@@ -92,7 +90,6 @@ class Server:
                         self.logger.warning(f"TX:{tx_id} requested nonexistent album.")
                         conn.sendall(struct.pack("!BQI", 0, 0, 0))
                         continue
-                    print(album_data)
                     zip_buffer = io.BytesIO()
                     tagsdata = {}
 

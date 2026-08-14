@@ -1,5 +1,10 @@
 from enum import IntEnum
 
+CLIENT_HEADER_SIZE = 7
+
+JSON_HEADER_SIZE = 4
+DOWNLOAD_HEADER_SIZE = 13
+
 class RequestType(IntEnum):
     SEARCH = 1
     DOWNLOAD = 2
