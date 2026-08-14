@@ -58,29 +58,6 @@ class TagReader:
         album = self.audio.get("album", [None])[0]
         track_number = int(str(self.audio.get("tracknumber", [0])[0]).strip().split('/')[0])
 
-        """
-        title, artist, album = None, None, None
-
-        if isinstance(tags, DictMixin):
-            title = tags.get("TITLE") or tags.get("Title") or tags.get("WM/Title")
-            artist = tags.get("ARTIST") or tags.get("Artist") or tags.get("Author")
-            album = tags.get("ALBUM") or tags.get("Album") or tags.get("WM/AlbumTitle")
-
-            title = str(title[0]) if title else None
-            artist = str(artist[0]) if artist else None
-            album = str(album[0]) if album else None
-
-        if isinstance(tags, ID3Tags):
-            artist = tags.get("TPE1", [None])[0]
-            title = tags.get("TIT2", [None])[0]
-            album = tags.get("TALB", [None])[0]
-
-        if isinstance(tags, MP4Tags):
-            artist = tags.get("\xa9ART", [None])[0]
-            title = tags.get("\xa9nam", [None])[0]
-            album = tags.get("\xa9alb", [None])[0]
-        """
-
         if title and artist and album:
             return (title.strip(), artist.strip(), album.strip(),
                     fid, int(self.audio.info.length), track_number,
